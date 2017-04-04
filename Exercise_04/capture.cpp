@@ -1,3 +1,32 @@
+/******************************************************************************
+    OpenCV capture, transform, display project
+    
+    Much of the code based on previous projects provided from ECEN 5623
+  
+    Author: B. Heberlein
+            M. Lennartz
+  
+    University of Colorado at Boulder: ECEN 5623 - Spring 2017
+    
+    This project is intended to have multiple modes that have seperate
+    functions.  There is an analysis mode that will aquire the hardcoded
+    camera, and take a series of image captures, preform a tranform, and
+    display those images in a created window.  The number of captures and
+    displays is a hardcoded value that will be used for calculating the 
+    average frame-rate.
+    
+    The other mode is the actual running mode that will preform a similar
+    function as analysis but will have a soft-timer with hardcoded delay
+    times.  The timer will start the capture thread, and check if it 
+    meets the associated deadline.  This process will run until the 'q'
+    button is pressed exiting the capture process and stopping the 
+    soft-timer.  A failure rate will then be calculated based on the 
+    total number of captures and misses.
+    
+    The project also has other modes such as debug and a default display
+    mode.
+******************************************************************************/
+//Required header files
 #include <stdlib.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -7,26 +36,29 @@
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
-
-//#include <unistd.h>
-//#include <stdio.h>
 #include <stdlib.h>
 #include <iostream>
 #include <string>
 
+//OpenCV required packages
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
+//Not used by project -- can be removed
 #define FRAMES_TO_CAPTURE 10
 
+//Used packages
 using namespace cv;
 using namespace std;
 
+//Used for display purposes
 enum _tran { GAUSS = 0, GRAY, HOUGH };
 string t_tran[3] = {"GAUSS","GRAY","HOUGH_CIRCLES" };
 
 // Custom structures
+// used to store resolutions that can be selected from the command line
+// values loaded in setup_resl() function
 typedef struct
 {
 	_tran		 transform;
@@ -34,21 +66,27 @@ typedef struct
 	unsigned int v_resl;
 } _test;
 
+// Used to store delays that can be selected from the command line 
 int selection_delay[9];
+// Resolution structs
 _test test[3];
 
+// Global pthread handles 
 pthread_t main_thread;
 pthread_t thread_analysis;
 pthread_t thread_transform;
 pthread_t thread_timer;
 
+// Global pthread attribute handles
 pthread_attr_t 	main_sched_attr;
 pthread_attr_t 	timer_sched_attr;
 pthread_attr_t 	transform_sched_attr;
 pthread_attr_t 	analysis_sched_attr;
 
+// Global CPU handle
 cpu_set_t cpu;
 
+// Global pthread structs used for setup of threads
 struct sched_param transform_param;
 struct sched_param nrt_param;
 struct sched_param timer_param;
@@ -58,14 +96,22 @@ struct sched_param analysis_param;
 //Used to sync with soft timer
 sem_t sem_image_capture;
 
+// Global variables
 int mode,selection,continue_to_run;
 int rt_max_prio, rt_min_prio, min;
 int exit_early, update, dv;
 unsigned int cnt_misses, cnt_passes;
-
 string dev;
 
+// Function definitions
 void print_opts();
+
+/*******************************************************************
+setup_resl
+
+Function used at start-up to set hardcoded values to specific
+global variables.
+*******************************************************************/
 void setup_resl(){
 	string log = "[ SETUP   ] ";
 
@@ -110,7 +156,11 @@ void setup_resl(){
 	//   /dev/video1 = 1
 	dv = 0;
 }
+/*******************************************************************
+print_scheduler
 
+Function used to display current Pthread policy.
+*******************************************************************/
 void print_scheduler(void)
 {
 	int schedType;
@@ -133,10 +183,18 @@ void print_scheduler(void)
 	}
 }
 
+// Pthread definitions
 void *Soft_timer( void *threadid );
 void *Analyze_transform( void *threadid );
 void *Preform_transform( void *threadid );
 
+/*******************************************************************
+main
+
+Used to determine which mode to run based on command line inputs.
+
+Will perform initial setup and pthread creation.
+*******************************************************************/
 int main( int argc, char* argv[] )
 {
 	string log = "[ MAIN    ] ";
@@ -157,6 +215,8 @@ int main( int argc, char* argv[] )
         exit(-1);
     }
 */
+    //Decode command line options
+    // FIXME - could add dev select as well
 	for(ii=1;ii<argc;ii++){
 		input = argv[ii];
 //		cout << log << ii << " : " << input << " : " << input.length() << endl;
@@ -171,21 +231,30 @@ int main( int argc, char* argv[] )
 			cout << log << "Set selection = " << selection << endl;
 		}
 	}
+    //Check for valid selection
 	if( selection < 0 || selection > 8 ){
 		cout << log << "ERROR!! No valid selection made." << endl << endl;
 		print_opts();
 		return -1;
 	}
-
+    
+    //CPU select for setting affinity later
+    //for multi-core system, this could be modified
+    //hardcoded for single cpu system
 	CPU_ZERO( &cpu );	//zero out set
 	CPU_SET(0, &cpu ); 	//add single cpu
 
 
 	//Read input mode
 	//Mode 0 - Print out
+    //  Will print-to-console selection and mode options.  This mode will run by default if none selected
 	//Mode 1 - Run operation
+    //  Will create two pthreads - Soft-timer, Process tranform
+    //  Then let those threads run until user stops
 	//Mode 2 - Analysis
+    //  Will create analysis thread and run for 500 captures, transforms, displays
 	//Mode 3 - Debug
+    //  Will printout all hardcoded resolutions, delays
 	if( mode == 1 ){
 		cout << log << "Mode selected - Run operation" << endl;
    		cout << log << "Before adjustments to scheduling policy: " << endl;
@@ -236,6 +305,7 @@ int main( int argc, char* argv[] )
 			perror(NULL);
 			return -1;
 		}
+        //Create processing thread
 		if( pthread_create( &thread_transform, 
 							&transform_sched_attr, 
 							Preform_transform, 
@@ -245,21 +315,25 @@ int main( int argc, char* argv[] )
 			perror(NULL);
 			return -1;
 		}
-
+        
+        //Waits until threads are completed
 		pthread_join( thread_timer, NULL );
 		pthread_join( thread_transform, NULL );
-
+        //Destroy threads attributes
 		if(pthread_attr_destroy( &timer_sched_attr ) != 0){
 			perror("attr destroy");
 		}
 		if(pthread_attr_destroy( &transform_sched_attr ) != 0){
 			perror("attr destroy");
 		}
-
+        //Destroy semaphore
 		sem_destroy(&sem_image_capture);
+        //Reset scheduler to previous state
 		rc=sched_setscheduler(getpid(), SCHED_OTHER, &nrt_param);
+        //Print out passes, misses -- passes means the number of starts (not if it passed or failed)
 		cout << log << "Number of passes : " << cnt_passes << endl;
 		cout << log << "Number of misses : " << cnt_misses << endl;
+        //Calc and print out failure rate
 		cout << log << "Failure rate : " << 100*( (double)cnt_misses/(double)cnt_passes ) << "%" << endl;
 	}else if( mode == 2 ){
 		cout << log << "Mode selected - Analysis" << endl;
@@ -309,6 +383,7 @@ int main( int argc, char* argv[] )
 			perror(NULL);
 			return -1;
 		}
+        //Wait for thread to finish
 		pthread_join( thread_analysis, NULL );
 
 	}else if( mode == 3 ){
@@ -326,6 +401,12 @@ int main( int argc, char* argv[] )
 	cout << log << "Done, exiting." << endl;
 	return 0;
 }
+/*******************************************************************
+Soft_timer
+
+Used to create a repeatable delay for the Perform_transform thread.
+Thread will also keep track of total starts and missed deadlines.
+*******************************************************************/
 void *Soft_timer( void *threadid ){
 	string log = "[ TIMER   ] ";
 	
@@ -350,6 +431,17 @@ void *Soft_timer( void *threadid ){
 	}
 	pthread_exit( NULL );
 }
+/*******************************************************************
+Preform_transform
+
+Pthread that will setup the display window and camera capture.  
+Then when the soft-timer posts to the semaphore, the thread
+will capture a image from the camera, resize it to selected
+resolution, perform selected transform, and display to 
+created window.  If the user does not stop the thread (by inputing
+'q'), the thread will raise the update flag and wait to be 
+triggered by soft-timer again.
+*******************************************************************/
 void *Preform_transform( void *threadid ){
 	string log = "[ PREFORM ] ";
 	int jj;
@@ -361,18 +453,25 @@ void *Preform_transform( void *threadid ){
 
 	cout << log << "Filter : " << t_tran[filter] << endl;
 
+    //Camera handle
     VideoCapture cam;
 
-	namedWindow("Standard", WINDOW_AUTOSIZE);
+    //Output display - "Standard" is the associated handle
+	namedWindow("Standard", WINDOW_AUTOSIZE); //resize based on output image
 //	namedWindow("Standard", WINDOW_NORMAL);
 
+    //Setup of camera capture resolution; known bug in OpenCV library
+    //that does not work for 2.8.  Suggested workaround did not work
     cam.set( CV_CAP_PROP_FRAME_WIDTH, test[selection%3].h_resl );   // <-- C++ syntax
     cam.set( CV_CAP_PROP_FRAME_HEIGHT, test[selection%3].v_resl );  // <-- C++ syntax
 
+    //Size is used to resize the captured image so to increase/decrease tranform time
 	Size size(test[selection%3].h_resl,test[selection%3].v_resl);
 
+    //Open camera using associated device
 	cam.open(dv);
 
+    //Check if camera successfully opened
 	if( !cam.isOpened() ){
         cout << log << "ERROR!! Video capture 0 did not correctly open" << endl;
         exit(-1);
@@ -384,16 +483,24 @@ void *Preform_transform( void *threadid ){
 	//cout << log << "Camera height : " << cam.get(CV_CAP_PROP_FRAME_HEIGHT) << endl;
 	cout << log << "Filter : " << t_tran[filter] << endl;
 
+    //Loop until user input
 	while(1){
 //		cout << log << "Wait for semaphore lock" << endl; //Move to sys call
+		//Wait for post from soft-timer
 		sem_wait( &sem_image_capture );
 //		cout << log << "Aquired semaphore lock" << endl;	//Move to sys call
+
+        	//Check if image correctly read
 		if( !cam.read(capture)){ 
         	cout << log << "ERROR!! Video capture 0 did not correctly read" << endl;
 			break;
 		}
+        
+        //Resize captured image 
+        //Will effect image quality, but will satisfy transform requirement
 		resize(capture,resized,size); //Resizing image to input size
-
+        
+        //User selected input
 		if(filter == 1){
         	cvtColor(resized, display, COLOR_BGR2GRAY);
 		}else if(filter == 0){		
@@ -430,10 +537,17 @@ void *Preform_transform( void *threadid ){
 	//have Soft_timer thread finish
 	continue_to_run = 0;
 
+    //exit thread
 	pthread_exit( NULL );
 
 }
+/*******************************************************************
+Analyze_transform
 
+pthread to calculate the average frame rate for a given transform
+and resolution.  Will make 500 captures, transforms, and displays
+and the calculate the total time / 500 
+*******************************************************************/
 void *Analyze_transform( void *threadid ){
 	string log = "[ ANALYZE ] ";
 	int jj;
@@ -443,18 +557,25 @@ void *Analyze_transform( void *threadid ){
 	int hard_cnt = 500;
 	int filter = selection/3;
 
+    //Camera handle
     VideoCapture cam;
 
+    //Output display - "Standard" is the associated handle
 	namedWindow("Standard", WINDOW_AUTOSIZE);
 //	namedWindow("Standard", WINDOW_NORMAL);
 
+    //Setup of camera capture resolution; known bug in OpenCV library
+    //that does not work for 2.8.  Suggested workaround did not work
     cam.set( CV_CAP_PROP_FRAME_WIDTH, test[selection%3].h_resl );   // <-- C++ syntax
     cam.set( CV_CAP_PROP_FRAME_HEIGHT, test[selection%3].v_resl );  // <-- C++ syntax
 
+    //Size is used to resize the captured image so to increase/decrease tranform time
 	Size size(test[selection%3].h_resl,test[selection%3].v_resl);
 
+    //Open camera using associated device
 	cam.open(dv);
 
+    //Check if camera successfully opened
 	if( !cam.isOpened() ){
         cout << log << "ERROR!! Video capture 0 did not correctly open" << endl;
         exit(-1);
@@ -471,14 +592,20 @@ void *Analyze_transform( void *threadid ){
 
 	cout << log << "Filter : " << t_tran[filter] << endl;
 
+    //Loop for 500 passes for analysis
 	for(jj=0;jj<hard_cnt;jj++){
 
+        //Check if image correctly read
 		if( !cam.read(capture)){ 
         	cout << log << "ERROR!! Video capture 0 did not correctly read" << endl;
 			break;
 		}
+        
+        //Resize captured image 
+        //Will effect image quality, but will satisfy transform requirement
 		resize(capture,resized,size); //Resizing image to input size
 
+        //User selected input
 		if(filter == 1){
         	cvtColor(resized, display, COLOR_BGR2GRAY);
 		}else if(filter == 0){		
@@ -513,11 +640,14 @@ void *Analyze_transform( void *threadid ){
 	//Finish time
 	clock_gettime(CLOCK_MONOTONIC, &finish);
 
+    //realease camera
     cam.release();
+    //destroy display window
 	destroyAllWindows();
 
 	cout << log << "Start  " << start.tv_sec << " [ " << start.tv_nsec << " ]" << endl;
 	cout << log << "Finish " << finish.tv_sec << " [ " << finish.tv_nsec << " ]" << endl;
+    //if user does not stop thread before completion of 500 passes
 	if(exit_early == 0){
 		long long s,n,d;
 		s = finish.tv_sec - start.tv_sec;
@@ -532,12 +662,19 @@ void *Analyze_transform( void *threadid ){
 		cout << log << "Test exited early, results not valid" << endl;
 	}
 
+    //exit thread
 	pthread_exit( NULL );
 
 	//have Soft_timer thread finish
+    //remove not needed for analysis
+    //if soft-timer added, move above pthread_exit()
 	continue_to_run = 0;
 }
+/*******************************************************************
+print_opts
 
+displays selection number and associated transform, resolutions
+*******************************************************************/
 void print_opts(){
 	cout << "Print out of command line options" << endl;
 	cout << endl;
