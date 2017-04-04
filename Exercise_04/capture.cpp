@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>
 
 //#include <unistd.h>
 //#include <stdio.h>
@@ -33,11 +34,10 @@ typedef struct
 	unsigned int v_resl;
 } _test;
 
-int selection_delays[9];
+int selection_delay[9];
 _test test[3];
 
 pthread_t main_thread;
-
 pthread_t thread_analysis;
 pthread_t thread_transform;
 pthread_t thread_timer;
@@ -45,68 +45,92 @@ pthread_t thread_timer;
 pthread_attr_t 	main_sched_attr;
 pthread_attr_t 	timer_sched_attr;
 pthread_attr_t 	transform_sched_attr;
+pthread_attr_t 	analysis_sched_attr;
+
+cpu_set_t cpu;
 
 struct sched_param transform_param;
 struct sched_param nrt_param;
 struct sched_param timer_param;
 struct sched_param main_param;
+struct sched_param analysis_param;
 
-
+//Used to sync with soft timer
 sem_t sem_image_capture;
 
 int mode,selection,continue_to_run;
 int rt_max_prio, rt_min_prio, min;
-int exit_early;
+int exit_early, update, dv;
+unsigned int cnt_misses, cnt_passes;
 
 string dev;
 
 void print_opts();
 void setup_resl(){
-	cout << "Starting setup" << endl;
+	string log = "[ SETUP   ] ";
+
+	cout << log << "Starting setup" << endl;
+
+	// Image resolutions
 	test[0].h_resl = 80;
 	test[0].v_resl = 60;
 	test[1].h_resl = 320;
 	test[1].v_resl = 240;
 	test[2].h_resl = 1280;
 	test[2].v_resl = 960;
+	// Transform tests
 	test[0].transform = GAUSS;
 	test[1].transform = GRAY;
 	test[2].transform = HOUGH;
+	// User input test selection
 	selection = -1;
+	// Flag to exit threads
 	continue_to_run = 1;
+	// Analysis valid flag
 	exit_early = 0;
-	
-//	selection_delay[0] = ; //Finish analysis
-//	selection_delay[1] = ; //Finish analysis
-//	selection_delay[2] = ; //Finish analysis
-//	selection_delay[3] = ; //Finish analysis
-//	selection_delay[4] = ; //Finish analysis
-//	selection_delay[5] = ; //Finish analysis
-//	selection_delay[6] = ; //Finish analysis
-//	selection_delay[7] = ; //Finish analysis
-//	selection_delay[8] = ; //Finish analysis
+	// Soft timer sleep values 
+	// based on resolution and transform
+	selection_delay[0] = 54000;  //Finish analysis
+	selection_delay[1] = 63000;  //Finish analysis
+	selection_delay[2] = 203000; //Finish analysis
+	selection_delay[3] = 50000;  //Finish analysis
+	selection_delay[4] = 57000;  //Finish analysis
+	selection_delay[5] = 87000;  //Finish analysis
+	selection_delay[6] = 55000;  //Finish analysis
+	selection_delay[7] = 67000;  //Finish analysis
+	selection_delay[8] = 484000; //Finish analysis
+	// Used to if deadline missed
+	update = 1;
+	// Metric counters
+	cnt_misses = 0;
+	cnt_passes = 0;
+
+	// Camera ref value 
+	//   /dev/video0 = 0
+	//   /dev/video1 = 1
+	dv = 0;
 }
 
 void print_scheduler(void)
 {
-   int schedType;
+	int schedType;
+	string log = "[ SCHEDULE] ";
 
-   schedType = sched_getscheduler(getpid());
+	schedType = sched_getscheduler(getpid());
 
-   switch(schedType)
-   {
-     case SCHED_FIFO:
-           printf("Pthread Policy is SCHED_FIFO\n");
-           break;
-     case SCHED_OTHER:
-           printf("Pthread Policy is SCHED_OTHER\n");
-       break;
-     case SCHED_RR:
-           printf("Pthread Policy is SCHED_OTHER\n");
-           break;
-     default:
-       printf("Pthread Policy is UNKNOWN\n");
-   }
+	switch(schedType){
+		case SCHED_FIFO:
+			cout << log << "Pthread Policy is SCHED_FIFO" << endl;
+			break;
+		case SCHED_OTHER:
+			cout << log << "Pthread Policy is SCHED_OTHER" << endl;
+			break;
+		case SCHED_RR:
+			cout << log << "Pthread Policy is SCHED_OTHER" << endl;
+			break;
+		default:
+			cout << log << "Pthread Policy is UNKNOWN" << endl;
+	}
 }
 
 void *Soft_timer( void *threadid );
@@ -119,7 +143,7 @@ int main( int argc, char* argv[] )
 	int rc;
 	int result,ii;
 	string input,cut;
-	print_scheduler();
+
 	//Setup selectable resoultions
 	setup_resl();
 /*
@@ -152,6 +176,9 @@ int main( int argc, char* argv[] )
 		print_opts();
 		return -1;
 	}
+
+	CPU_ZERO( &cpu );	//zero out set
+	CPU_SET(0, &cpu ); 	//add single cpu
 
 
 	//Read input mode
@@ -231,12 +258,50 @@ int main( int argc, char* argv[] )
 
 		sem_destroy(&sem_image_capture);
 		rc=sched_setscheduler(getpid(), SCHED_OTHER, &nrt_param);
+		cout << log << "Number of passes : " << cnt_passes << endl;
+		cout << log << "Number of misses : " << cnt_misses << endl;
+		cout << log << "Failure rate : " << 100*( (double)cnt_misses/(double)cnt_passes ) << "%" << endl;
 	}else if( mode == 2 ){
 		cout << log << "Mode selected - Analysis" << endl;
 
+		print_scheduler();
+
+		//Scheduler setup
+		pthread_attr_init(&analysis_sched_attr);
+		pthread_attr_init(&main_sched_attr);
+
+		pthread_attr_setinheritsched(&analysis_sched_attr, PTHREAD_EXPLICIT_SCHED);
+		pthread_attr_setinheritsched(&main_sched_attr, PTHREAD_EXPLICIT_SCHED);
+
+		pthread_attr_setschedpolicy(&analysis_sched_attr, SCHED_FIFO);
+		pthread_attr_setschedpolicy(&main_sched_attr, SCHED_FIFO);
+
+		pthread_attr_setaffinity_np( &analysis_sched_attr, sizeof(cpu), &cpu );
+		pthread_attr_setaffinity_np( &main_sched_attr, sizeof(cpu), &cpu );
+
+		rt_max_prio = sched_get_priority_max(SCHED_FIFO);
+		rt_min_prio = sched_get_priority_min(SCHED_FIFO);
+
+		rc=sched_getparam(getpid(), &nrt_param);
+
+		main_param.sched_priority = rt_max_prio;
+		analysis_param.sched_priority = rt_max_prio-1;
+
+		if (sched_setscheduler(getpid(), SCHED_FIFO, &main_param)){
+			cout << log << "ERROR; sched_setscheduler rc is " << rc << endl; 
+			perror(NULL); 
+			exit(-1);
+		}
+		//Checking scheduler
+   		cout << log << "After adjustments to scheduling policy: " << endl;
+		print_scheduler();
+
+		pthread_attr_setschedparam(&analysis_sched_attr, &analysis_param);
+		pthread_attr_setschedparam(&main_sched_attr, &main_param);
+
 		//Create thread
 		if( pthread_create( &thread_analysis, 
-							NULL, 
+							&analysis_sched_attr, 
 							Analyze_transform, 
 							(void*)0				) 
 		){
@@ -265,12 +330,23 @@ void *Soft_timer( void *threadid ){
 	string log = "[ TIMER   ] ";
 	
 	cout << log << "Setup hold time" << endl;
-	usleep(100000);
-	while(continue_to_run){	
-		usleep(200000);							//define from analysis 
-//		usleep( selection_delay[selection] );							
+	usleep(1000000);
+
+	while(continue_to_run){
+		//Check if image update completed
+		if( update == 0 ){
+			cout << log << "Missed soft deadline!" << endl;
+			//Tally of missed deadlines
+			cnt_misses += 1;
+		}
+		//Clear update flag
+		update = 0;
+		//Tally of total service starts
+		cnt_passes += 1;
+		//Post to sync thread to begin
 		sem_post( &sem_image_capture );
-		cout << log << "Post semaphore" << endl; //Move to sys call
+		//Sleep for selection specified time 
+		usleep( selection_delay[selection] );
 	}
 	pthread_exit( NULL );
 }
@@ -278,9 +354,8 @@ void *Preform_transform( void *threadid ){
 	string log = "[ PREFORM ] ";
 	int jj;
     struct timespec start, finish;
-	Mat capture,gray,display;
+	Mat capture,resized,gray,display;
     vector<Vec3f> circles;
-	int dv = 0;
 	int hard_cnt = 500;
 	int filter = selection/3;
 
@@ -294,6 +369,8 @@ void *Preform_transform( void *threadid ){
     cam.set( CV_CAP_PROP_FRAME_WIDTH, test[selection%3].h_resl );   // <-- C++ syntax
     cam.set( CV_CAP_PROP_FRAME_HEIGHT, test[selection%3].v_resl );  // <-- C++ syntax
 
+	Size size(test[selection%3].h_resl,test[selection%3].v_resl);
+
 	cam.open(dv);
 
 	if( !cam.isOpened() ){
@@ -301,26 +378,29 @@ void *Preform_transform( void *threadid ){
         exit(-1);
     }
 
-	cout << log << "Successfully opened cams" << endl;
-	cout << log << "Camera width  : " << cam.get(CV_CAP_PROP_FRAME_WIDTH) << endl;
-	cout << log << "Camera height : " << cam.get(CV_CAP_PROP_FRAME_HEIGHT) << endl;
+	cout << log << "Successfully opened cam" << endl;
+	cout << log << "Image sized to " << test[selection%3].h_resl << "x" << test[selection%3].v_resl << endl;
+	//cout << log << "Camera width  : " << cam.get(CV_CAP_PROP_FRAME_WIDTH) << endl;
+	//cout << log << "Camera height : " << cam.get(CV_CAP_PROP_FRAME_HEIGHT) << endl;
 	cout << log << "Filter : " << t_tran[filter] << endl;
 
 	while(1){
-		cout << log << "Wait for semaphore lock" << endl; //Move to sys call
+//		cout << log << "Wait for semaphore lock" << endl; //Move to sys call
 		sem_wait( &sem_image_capture );
-		cout << log << "Aquired semaphore lock" << endl;	//Move to sys call
+//		cout << log << "Aquired semaphore lock" << endl;	//Move to sys call
 		if( !cam.read(capture)){ 
         	cout << log << "ERROR!! Video capture 0 did not correctly read" << endl;
 			break;
 		}
+		resize(capture,resized,size); //Resizing image to input size
+
 		if(filter == 1){
-        	cvtColor(capture, display, COLOR_BGR2GRAY);
+        	cvtColor(resized, display, COLOR_BGR2GRAY);
 		}else if(filter == 0){		
-			GaussianBlur(capture, display, Size(9,9), 2, 2);
+			GaussianBlur(resized, display, Size(9,9), 2, 2);
 		}else if(filter == 2){
 		    // Converts an image from one color to another (gray)
-		    cvtColor(capture, gray, COLOR_BGR2GRAY);
+		    cvtColor(resized, gray, COLOR_BGR2GRAY);
 		    // Blurs an image using Gaussian filter
 		    GaussianBlur(gray, gray, Size(9,9), 2, 2);
 		    // Finds circles in a grayscale image using the Hough transform
@@ -329,13 +409,13 @@ void *Preform_transform( void *threadid ){
 				Point center(cvRound(circles[i][0]), cvRound(circles[i][1]));
 				int radius = cvRound(circles[i][2]);
 				// circle center
-				circle( capture, center, 3, Scalar(0,255,0), -1, 8, 0 );
+				circle( resized, center, 3, Scalar(0,255,0), -1, 8, 0 );
 				// circle outline
-				circle( capture, center, radius, Scalar(0,0,255), 3, 8, 0 );
+				circle( resized, center, radius, Scalar(0,0,255), 3, 8, 0 );
 			}
-			display = capture.clone();
+			display = resized.clone();
 		}else{
-			display = capture.clone();	
+			display = resized.clone();	
 		}
 		imshow( "Standard", display);
 		// 'q' will halt this thread and timer
@@ -344,6 +424,7 @@ void *Preform_transform( void *threadid ){
 			printf("break sig\n"); 
 			break;
 		}
+		update = 1;
 	}
 
 	//have Soft_timer thread finish
@@ -357,9 +438,8 @@ void *Analyze_transform( void *threadid ){
 	string log = "[ ANALYZE ] ";
 	int jj;
     struct timespec start, finish;
-	Mat capture,gray,display;
+	Mat capture,resized,gray,display;
     vector<Vec3f> circles;
-	int dv = 0;
 	int hard_cnt = 500;
 	int filter = selection/3;
 
@@ -371,6 +451,8 @@ void *Analyze_transform( void *threadid ){
     cam.set( CV_CAP_PROP_FRAME_WIDTH, test[selection%3].h_resl );   // <-- C++ syntax
     cam.set( CV_CAP_PROP_FRAME_HEIGHT, test[selection%3].v_resl );  // <-- C++ syntax
 
+	Size size(test[selection%3].h_resl,test[selection%3].v_resl);
+
 	cam.open(dv);
 
 	if( !cam.isOpened() ){
@@ -378,27 +460,32 @@ void *Analyze_transform( void *threadid ){
         exit(-1);
     }
 
-	cout << log << "Successfully opened cams" << endl;
-	cout << log << "Camera width  : " << cam.get(CV_CAP_PROP_FRAME_WIDTH) << endl;
-	cout << log << "Camera height : " << cam.get(CV_CAP_PROP_FRAME_HEIGHT) << endl;
+	cout << log << "Successfully opened cam" << endl;
+	cout << log << "Image sized to " << test[selection%3].h_resl << "x" << test[selection%3].v_resl << endl;
+	//cout << log << "Camera width  : " << cam.get(CV_CAP_PROP_FRAME_WIDTH) << endl;
+	//cout << log << "Camera height : " << cam.get(CV_CAP_PROP_FRAME_HEIGHT) << endl;
 
 	cout << log << "Running analysis" << endl;
 	//Start time
 	clock_gettime(CLOCK_MONOTONIC, &start);
 
 	cout << log << "Filter : " << t_tran[filter] << endl;
+
 	for(jj=0;jj<hard_cnt;jj++){
+
 		if( !cam.read(capture)){ 
         	cout << log << "ERROR!! Video capture 0 did not correctly read" << endl;
 			break;
 		}
+		resize(capture,resized,size); //Resizing image to input size
+
 		if(filter == 1){
-        	cvtColor(capture, display, COLOR_BGR2GRAY);
+        	cvtColor(resized, display, COLOR_BGR2GRAY);
 		}else if(filter == 0){		
-			GaussianBlur(capture, display, Size(9,9), 2, 2);
+			GaussianBlur(resized, display, Size(9,9), 2, 2);
 		}else if(filter == 2){
 		    // Converts an image from one color to another (gray)
-		    cvtColor(capture, gray, COLOR_BGR2GRAY);
+		    cvtColor(resized, gray, COLOR_BGR2GRAY);
 		    // Blurs an image using Gaussian filter
 		    GaussianBlur(gray, gray, Size(9,9), 2, 2);
 		    // Finds circles in a grayscale image using the Hough transform
@@ -407,11 +494,11 @@ void *Analyze_transform( void *threadid ){
 				Point center(cvRound(circles[i][0]), cvRound(circles[i][1]));
 				int radius = cvRound(circles[i][2]);
 				// circle center
-				circle( capture, center, 3, Scalar(0,255,0), -1, 8, 0 );
+				circle( resized, center, 3, Scalar(0,255,0), -1, 8, 0 );
 				// circle outline
-				circle( capture, center, radius, Scalar(0,0,255), 3, 8, 0 );
+				circle( resized, center, radius, Scalar(0,0,255), 3, 8, 0 );
 			}
-			display = capture.clone();
+			display = resized.clone();
 		}else{
 			display = capture.clone();	
 		}
