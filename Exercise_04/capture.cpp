@@ -10,12 +10,12 @@
     
     This project is intended to have multiple modes that have seperate
     functions.  There is an analysis mode that will aquire the hardcoded
-    camera, and take a series of image captures, preform a tranform, and
+    camera, and take a series of image captures, perform a tranform, and
     display those images in a created window.  The number of captures and
     displays is a hardcoded value that will be used for calculating the 
     average frame-rate.
     
-    The other mode is the actual running mode that will preform a similar
+    The other mode is the actual running mode that will perform a similar
     function as analysis but will have a soft-timer with hardcoded delay
     times.  The timer will start the capture thread, and check if it 
     meets the associated deadline.  This process will run until the 'q'
@@ -186,7 +186,7 @@ void print_scheduler(void)
 // Pthread definitions
 void *Soft_timer( void *threadid );
 void *Analyze_transform( void *threadid );
-void *Preform_transform( void *threadid );
+void *Preform_transform( void *threadid );  // FIXME - wrong spelling
 
 /*******************************************************************
 main
@@ -308,7 +308,7 @@ int main( int argc, char* argv[] )
         //Create processing thread
 		if( pthread_create( &thread_transform, 
 							&transform_sched_attr, 
-							Preform_transform, 
+							Preform_transform,              // FIXME - wrong spelling
 							(void*)0				) 
 		){
 			cout << log << "ERROR!! Could not create transform thread!" << endl;
@@ -432,7 +432,7 @@ void *Soft_timer( void *threadid ){
 	pthread_exit( NULL );
 }
 /*******************************************************************
-Preform_transform
+Perform_transform
 
 Pthread that will setup the display window and camera capture.  
 Then when the soft-timer posts to the semaphore, the thread
@@ -442,8 +442,8 @@ created window.  If the user does not stop the thread (by inputing
 'q'), the thread will raise the update flag and wait to be 
 triggered by soft-timer again.
 *******************************************************************/
-void *Preform_transform( void *threadid ){
-	string log = "[ PREFORM ] ";
+void *Preform_transform( void *threadid ){      // FIXME - wrong spelling
+	string log = "[ PERFORM ] ";
 	int jj;
     struct timespec start, finish;
 	Mat capture,resized,gray,display;
