@@ -1,5 +1,9 @@
 /*************************************************************************************************************************************************/
+Author: Martin Lennartz
 
+len_hw3_3:
+	The function will create and run 2 task and 1 timer.  The timer will increment a counter and will resume 
+each task based on a specific timing scheme.  Task 1 is the higher priority task and set as such.
 /*************************************************************************************************************************************************/
 /* Standard includes. */
 #include <stdio.h>
@@ -19,22 +23,27 @@
 //#define x10_MS_TICKS		pdMS_TO_TICKS( 10UL )
 //#define x40_MS_TICKS		pdMS_TO_TICKS( 40UL )
 
+//Used to setup the timer
 #define TIMER_FREQUENCY_MS	pdMS_TO_TICKS( 10UL )
 
+// Macro used to calculate current time
 #define CURRENT_MS_TIME \
 	xTaskGetTickCount()/x01_MS_TICKS
 
 //static QueueHandle_t xQueue1 = NULL;
 //static QueueHandle_t xQueue2 = NULL;
 
+//Task handles for suspending and resuming
 static TaskHandle_t  x_t2   = NULL;
 static TaskHandle_t  x_t1   = NULL;
 static TimerHandle_t xTimer = NULL;
 
+//Task definitions
 static void q_Task1(void *params);
 static void q_Task2(void *params);
 static void t_timerCallback(TimerHandle_t xTimerHandle);
 
+//FIXME remove
 TickType_t start_time;
 
 void len_hw3_3(void){
@@ -45,6 +54,7 @@ void len_hw3_3(void){
 //	xQueue1 = xQueueCreate(QUEUE_LENGTH, sizeof(uint32_t));
 //	xQueue2 = xQueueCreate(QUEUE_LENGTH, sizeof(uint32_t));
 
+	//Task creation
 	xTaskCreate(q_Task1, "Task1", configMINIMAL_STACK_SIZE, NULL, TASK_1_PRIORITY, &x_t1);
 	xTaskCreate(q_Task2, "Task2", configMINIMAL_STACK_SIZE, NULL, TASK_2_PRIORITY, &x_t2);
 
@@ -56,6 +66,9 @@ void len_hw3_3(void){
 	printf("%5d ms %s Starting.\n", CURRENT_MS_TIME, log);
 	vTaskStartScheduler();
 }
+/****************************************************************
+Task1 - Suspend self.  On resume, delay using for-loop and re-suspend
+****************************************************************/
 static void q_Task1(void *params)
 {
 //	const unsigned int   ulValueToSend = 1;
@@ -82,6 +95,9 @@ static void q_Task1(void *params)
 		printf("%5d ms %s Task 1 finished running; Suspending\n", CURRENT_MS_TIME, log);
 	}
 }
+/****************************************************************
+Task2 - Suspend self.  On resume, delay using for-loop and re-suspend
+****************************************************************/
 static void q_Task2(void *params)
 {
 //	const unsigned int   ulValueToSend = 2;
@@ -105,6 +121,11 @@ static void q_Task2(void *params)
 		printf("%5d ms %s Task 2 finished running; Suspending\n", CURRENT_MS_TIME, log);
 	}
 }
+/****************************************************************
+Timer - will increment on each interrupt and resume tasks per scheme
+The timer would normally loop back around and continue, but is prevented
+and stalls.  I did this so I could get a good screen grab.
+****************************************************************/
 static void t_timerCallback(TimerHandle_t xTimerHandle){
 	(void)xTimerHandle;
 	static unsigned int cnt = 0;

@@ -1,5 +1,7 @@
 /*************************************************************************************************************************************************/
+Modified by Martin Lennartz
 
+Main call that runs the three functions I designed.  The LEN_HW3_PROJ_SELECT definition controls which is run.
 /*************************************************************************************************************************************************/
 /* Standard includes. */
 #include <stdio.h>
