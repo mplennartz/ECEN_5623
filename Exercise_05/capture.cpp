@@ -41,6 +41,7 @@ FIXME - Info from Ex4
 #include <stdlib.h>
 #include <iostream>
 #include <string>
+#include <iomanip>
 
 //OpenCV required packages
 #include <opencv2/core/core.hpp>
@@ -281,7 +282,7 @@ void *ImageCapture( void *threadid ){
 		clock_gettime( CLOCK_REALTIME, &current );
 		cout << log << "Image Capture running : " <<
 			current.tv_sec << "." <<
-			current.tv_nsec << endl;
+			setfill('0') << setw(9) << current.tv_nsec << endl;
 
 		// Release lock
 		pthread_mutex_unlock( &system_mutex );
@@ -312,7 +313,7 @@ void *MotorControl( void *threadid ){
 		clock_gettime( CLOCK_REALTIME, &current );
 		cout << log << "Motor Control running : " << 
 			current.tv_sec << "." <<
-			current.tv_nsec << endl;
+			setfill('0') << setw(9) << current.tv_nsec << endl;
 
 		// Release lock
 		pthread_mutex_unlock( &system_mutex );
